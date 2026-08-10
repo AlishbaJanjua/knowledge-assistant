@@ -1,0 +1,29 @@
+# Environment
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# User uploaded files
+uploads/
+
+# Local/testing files
+dummy_website/
+
+# Local vector databases
+chroma_db/
+
+# User memory / interaction data
+memory/
+
+# Secrets / SSH keys
+*.pem
+*.key
+
+# Streamlit
+.streamlit/secrets.toml
+
