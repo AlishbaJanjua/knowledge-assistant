@@ -1,6 +1,10 @@
+import logging
 import os
+import time
 
 from utils.chunking import chunk_documents
+
+logger = logging.getLogger(__name__)
 
 STRATEGIES = [
     "Fixed-size chunking",
@@ -78,13 +82,43 @@ def _recommend_strategy(documents, file_path):
 
 
 def analyze_and_chunk(documents, file_path=None):
+    """
+    Recommend a strategy, then chunk with that strategy.
 
-    strategy, reason = _recommend_strategy(documents, file_path)
-    chunks = chunk_documents(documents)
+    Returns both the recommended and applied strategy so callers/UI can
+    distinguish a fallback from the original recommendation.
+    """
 
+    started = time.perf_counter()
+
+    recommended, reason = _recommend_strategy(documents, file_path)
+    chunks, applied, fallback_note = chunk_documents(documents, recommended)
+
+    if applied != recommended:
+        reason = (
+            f"{reason} "
+            f"Recommended: {recommended}. Applied: {applied}."
+            + (f" {fallback_note}" if fallback_note else "")
+        ).strip()
+    elif fallback_note:
+        reason = f"{reason} {fallback_note}".strip()
+
+    elapsed = time.perf_counter() - started
+    msg = (
+        f"[timing] analyze_and_chunk: {elapsed:.3f}s "
+        f"(recommended={recommended}, applied={applied}, chunks={len(chunks)})"
+    )
+    logger.info(msg)
+    print(msg, flush=True)
+
+    # `strategy` remains the applied strategy for honest display/storage.
+    # `recommended_strategy` preserves the original recommendation.
     return {
-        "strategy": strategy,
+        "strategy": applied,
+        "recommended_strategy": recommended,
+        "applied_strategy": applied,
         "reason": reason,
         "chunks": chunks,
         "chunk_count": len(chunks),
+        "fallback": applied != recommended,
     }

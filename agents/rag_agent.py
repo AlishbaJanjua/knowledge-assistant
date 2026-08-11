@@ -13,6 +13,24 @@ llm = ChatGroq(
 
 
 
+def _context_from_document(doc):
+    """
+    Prefer bounded parent_content for parent-child children when present.
+    Falls back to the child/page text so normal RAG is unchanged.
+    """
+
+    metadata = getattr(doc, "metadata", None) or {}
+    parent_content = metadata.get("parent_content")
+
+    if isinstance(parent_content, str) and parent_content.strip():
+        child_text = (doc.page_content or "").strip()
+        if child_text and child_text not in parent_content:
+            return f"{parent_content}\n\nRelevant section:\n{child_text}"
+        return parent_content
+
+    return doc.page_content or ""
+
+
 def ask_question(db, question):
 
 
@@ -46,7 +64,7 @@ def ask_question(db, question):
 
         context = "\n\n".join(
             [
-                doc.page_content
+                _context_from_document(doc)
                 for doc in docs
             ]
         )

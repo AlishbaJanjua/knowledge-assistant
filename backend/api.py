@@ -1,5 +1,7 @@
 import base64
+import logging
 import os
+import time
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -27,6 +29,8 @@ from backend.config import CARTESIA_API_KEY
 from vectorstore.chroma_db import create_vectorstore, delete_vectorstore, load_vectorstore
 
 AUDIO_MIME = "audio/wav"
+
+logger = logging.getLogger(__name__)
 
 FRONTEND_DIR = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -202,23 +206,50 @@ async def upload_document(
 
     path = save_file_bytes(content, file.filename, folder)
 
+    upload_started = time.perf_counter()
+
+    step_started = time.perf_counter()
     docs = load_document(path)
+    load_elapsed = time.perf_counter() - step_started
+
+    step_started = time.perf_counter()
     result = analyze_and_chunk(docs, path)
+    analyze_elapsed = time.perf_counter() - step_started
+
     document_id = register_upload(
         tenant_id,
         file.filename,
         path,
-        strategy=result["strategy"],
+        strategy=result["applied_strategy"],
         reason=result["reason"],
     )
+
+    step_started = time.perf_counter()
     create_vectorstore(result["chunks"], tenant_id, document_id)
+    vectorstore_elapsed = time.perf_counter() - step_started
+
+    total_elapsed = time.perf_counter() - upload_started
+    summary = (
+        f"[timing] upload_pipeline total={total_elapsed:.3f}s | "
+        f"load_document={load_elapsed:.3f}s | "
+        f"analyze_and_chunk={analyze_elapsed:.3f}s | "
+        f"create_vectorstore={vectorstore_elapsed:.3f}s | "
+        f"file={file.filename} chunks={result['chunk_count']} "
+        f"strategy={result['applied_strategy']}"
+    )
+    logger.info(summary)
+    print(summary, flush=True)
 
     return {
         "document_id": document_id,
         "filename": file.filename,
-        "strategy": result["strategy"],
+        # `strategy` = applied (honest / backward-compatible for existing UI)
+        "strategy": result["applied_strategy"],
+        "recommended_strategy": result["recommended_strategy"],
+        "applied_strategy": result["applied_strategy"],
         "reason": result["reason"],
         "chunk_count": result["chunk_count"],
+        "fallback": result.get("fallback", False),
     }
 
 
