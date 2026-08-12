@@ -14,6 +14,15 @@ from fastapi.responses import FileResponse
 from agents.chunking_agent import analyze_and_chunk
 from agents.memory_agent import delete_memory, invoke_config, load_memory
 from agents.voice_agent import speech_to_text, text_to_speech
+from backend.config import CARTESIA_API_KEY
+from backend.otp import (
+    OTP_REQUEST_COOLDOWN_SECONDS,
+    clear_otp,
+    cooldown_remaining,
+    create_and_store_otp,
+    send_otp_email,
+    verify_otp,
+)
 from graph.workflow import app as agent_graph
 from loaders.loader import load_document
 from utils.helpers import (
@@ -25,7 +34,6 @@ from utils.helpers import (
     save_file_bytes,
     sync_registry_from_folder,
 )
-from backend.config import CARTESIA_API_KEY
 from vectorstore.chroma_db import create_vectorstore, delete_vectorstore, load_vectorstore
 
 AUDIO_MIME = "audio/wav"
@@ -83,6 +91,15 @@ class SpeakRequest(BaseModel):
     text: str
 
 
+class OtpRequest(BaseModel):
+    email: EmailStr
+
+
+class OtpVerifyRequest(BaseModel):
+    email: EmailStr
+    otp: str
+
+
 def _tenant_from_email(email: str):
 
     tenant_id, folder = create_tenant_folder(email)
@@ -119,6 +136,70 @@ def health():
         "status": "ok",
         "voice": bool(CARTESIA_API_KEY),
     }
+
+
+@api.post("/api/auth/request-otp")
+def request_otp(body: OtpRequest):
+    """Send a 6-digit OTP to the email used by the existing login gate."""
+
+    email = str(body.email)
+    wait = cooldown_remaining(email)
+
+    if wait > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Please wait {wait} seconds before requesting another code."
+            ),
+        )
+
+    otp, expires_in = create_and_store_otp(email)
+
+    try:
+        send_otp_email(email, otp)
+    except Exception as exc:
+        clear_otp(email)
+        logger.exception("Failed to send OTP email")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not send verification email. Try again shortly.",
+        ) from exc
+
+    return {
+        "status": "sent",
+        "expires_in": expires_in,
+        "cooldown": OTP_REQUEST_COOLDOWN_SECONDS,
+    }
+
+
+@api.post("/api/auth/verify-otp")
+def verify_otp_endpoint(body: OtpVerifyRequest):
+    """Verify the OTP for the email-gate login. Code is single-use."""
+
+    ok, reason = verify_otp(str(body.email), body.otp)
+
+    if ok:
+        return {
+            "status": "verified",
+            "email": str(body.email).strip().lower(),
+        }
+
+    if reason == "expired":
+        raise HTTPException(
+            status_code=400,
+            detail="Code expired or not found. Request a new one.",
+        )
+
+    if reason == "locked":
+        raise HTTPException(
+            status_code=400,
+            detail="Too many invalid attempts. Request a new code.",
+        )
+
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid verification code.",
+    )
 
 
 @api.get("/widget")

@@ -101,6 +101,35 @@ body {
     opacity: 0.88;
 }
 
+.gate-card button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.otp-step {
+    margin-bottom: 0.75rem;
+}
+
+.otp-step.hidden {
+    display: none;
+}
+
+.btn-link {
+    width: auto !important;
+    padding: 0.25rem 0 !important;
+    margin-top: 0.25rem;
+    background: transparent !important;
+    color: var(--text-secondary) !important;
+    font-size: 0.8125rem !important;
+    font-weight: 500 !important;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.btn-link:hover {
+    opacity: 0.8;
+}
+
 .gate-error {
     margin-top: 0.75rem;
     font-size: 0.8125rem;

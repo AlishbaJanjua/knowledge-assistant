@@ -33,6 +33,10 @@ const app = document.getElementById("app");
 const emailInput = document.getElementById("email-input");
 const emailSubmit = document.getElementById("email-submit");
 const gateError = document.getElementById("gate-error");
+const gateLabel = document.getElementById("gate-label");
+const otpStep = document.getElementById("otp-step");
+const otpInput = document.getElementById("otp-input");
+const otpResend = document.getElementById("otp-resend");
 const docList = document.getElementById("doc-list");
 const docEmpty = document.getElementById("doc-empty");
 const docTitle = document.getElementById("doc-title");
@@ -719,21 +723,162 @@ async function toggleRecording() {
 
 emailSubmit.addEventListener("mousedown", unlockAudio);
 
-emailSubmit.addEventListener("click", () => {
-    unlockAudio();
-    const email = emailInput.value.trim();
+let gateMode = "email"; // "email" | "otp"
+let pendingEmail = "";
 
-    if (!isValidEmail(email)) {
-        gateError.textContent = "Enter a valid email address.";
-        gateError.hidden = false;
+function showGateError(message) {
+    gateError.textContent = message;
+    gateError.hidden = false;
+}
+
+function setGateBusy(busy) {
+    emailSubmit.disabled = busy;
+    otpResend.disabled = busy;
+    emailInput.disabled = busy && gateMode === "otp";
+}
+
+function showOtpStep(email) {
+    gateMode = "otp";
+    pendingEmail = email;
+    gateLabel.textContent = `Enter the code sent to ${email}`;
+    emailInput.readOnly = true;
+    otpStep.classList.remove("hidden");
+    otpInput.value = "";
+    emailSubmit.textContent = "Verify";
+    otpInput.focus();
+}
+
+function resetGateToEmail() {
+    gateMode = "email";
+    pendingEmail = "";
+    gateLabel.textContent = "Continue with your email";
+    emailInput.readOnly = false;
+    otpStep.classList.add("hidden");
+    otpInput.value = "";
+    emailSubmit.textContent = "Continue";
+}
+
+async function requestOtp(email) {
+    const response = await fetch(`${API}/api/auth/request-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+    });
+
+    let payload = {};
+    try {
+        payload = await response.json();
+    } catch (_) {
+        payload = {};
+    }
+
+    if (!response.ok) {
+        const detail = payload.detail || "Could not send verification code.";
+        throw new Error(typeof detail === "string" ? detail : "Could not send verification code.");
+    }
+
+    return payload;
+}
+
+async function verifyOtp(email, otp) {
+    const response = await fetch(`${API}/api/auth/verify-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, otp }),
+    });
+
+    let payload = {};
+    try {
+        payload = await response.json();
+    } catch (_) {
+        payload = {};
+    }
+
+    if (!response.ok) {
+        const detail = payload.detail || "Invalid verification code.";
+        throw new Error(typeof detail === "string" ? detail : "Invalid verification code.");
+    }
+
+    return payload;
+}
+
+emailSubmit.addEventListener("click", async () => {
+    unlockAudio();
+    gateError.hidden = true;
+
+    if (gateMode === "email") {
+        const email = emailInput.value.trim();
+
+        if (!isValidEmail(email)) {
+            showGateError("Enter a valid email address.");
+            return;
+        }
+
+        setGateBusy(true);
+        emailSubmit.textContent = "Sending…";
+
+        try {
+            await requestOtp(email);
+            showOtpStep(email);
+        } catch (err) {
+            showGateError(err.message || "Could not send verification code.");
+            emailSubmit.textContent = "Continue";
+        } finally {
+            setGateBusy(false);
+        }
+
         return;
     }
 
+    const otp = otpInput.value.trim();
+
+    if (!/^\d{6}$/.test(otp)) {
+        showGateError("Enter the 6-digit code from your email.");
+        return;
+    }
+
+    setGateBusy(true);
+    emailSubmit.textContent = "Verifying…";
+
+    try {
+        const result = await verifyOtp(pendingEmail, otp);
+        startSession(result.email || pendingEmail);
+        resetGateToEmail();
+    } catch (err) {
+        showGateError(err.message || "Invalid verification code.");
+        emailSubmit.textContent = "Verify";
+    } finally {
+        setGateBusy(false);
+    }
+});
+
+otpResend.addEventListener("click", async () => {
+    if (!pendingEmail) return;
+
     gateError.hidden = true;
-    startSession(email);
+    setGateBusy(true);
+
+    try {
+        await requestOtp(pendingEmail);
+        showGateError("A new code was sent.");
+        gateError.style.color = "var(--text-secondary)";
+        otpInput.focus();
+    } catch (err) {
+        gateError.style.color = "#b91c1c";
+        showGateError(err.message || "Could not resend code.");
+    } finally {
+        setGateBusy(false);
+        setTimeout(() => {
+            gateError.style.color = "#b91c1c";
+        }, 2500);
+    }
 });
 
 emailInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") emailSubmit.click();
+});
+
+otpInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") emailSubmit.click();
 });
 

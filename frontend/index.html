@@ -11,11 +11,15 @@
 </head>
 <body>
 
-    <!-- Email gate -->
+    <!-- Email gate (OTP) -->
     <div class="gate" id="gate">
         <div class="gate-card">
-            <p class="gate-label">Continue with your email</p>
+            <p class="gate-label" id="gate-label">Continue with your email</p>
             <input type="email" id="email-input" placeholder="you@example.com" autocomplete="email">
+            <div id="otp-step" class="otp-step hidden">
+                <input type="text" id="otp-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code">
+                <button type="button" class="btn-link" id="otp-resend">Resend code</button>
+            </div>
             <button type="button" id="email-submit">Continue</button>
             <p class="gate-error" id="gate-error" hidden></p>
         </div>

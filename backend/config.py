@@ -5,6 +5,8 @@ load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+FROM_EMAIL = os.getenv("FROM_EMAIL")
 
 DATA_DIR = os.getenv("DATA_DIR", ".")
 
