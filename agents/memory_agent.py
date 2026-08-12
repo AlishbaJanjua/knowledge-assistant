@@ -1,109 +1,84 @@
-import json
+"""LangGraph short-term (checkpointer) and long-term (Store) memory.
+
+Persistent across process restarts via SQLite:
+- short-term: SqliteSaver (checkpoints.sqlite)
+- long-term: SqliteStore (store.sqlite)
+
+Tenant/document isolation uses stable thread_ids and Store namespaces.
+"""
+
 import os
+import sqlite3
+from typing import Optional
+
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.store.sqlite import SqliteStore
 
 from backend.config import data_path
 from backend.llm import llm
 
+# Long-term Store key within each tenant/document namespace.
+LONG_TERM_NOTES_KEY = "notes"
 
-def _tenant_id(email):
+_MEMORY_DIR = data_path("langgraph_memory")
+os.makedirs(_MEMORY_DIR, exist_ok=True)
+
+# Long-lived connections for the FastAPI process lifetime.
+# check_same_thread=False is required; SqliteSaver/SqliteStore use their own locks.
+# SqliteStore requires isolation_level=None (autocommit) so explicit BEGIN works.
+_checkpoint_conn = sqlite3.connect(
+    os.path.join(_MEMORY_DIR, "checkpoints.sqlite"),
+    check_same_thread=False,
+)
+_store_conn = sqlite3.connect(
+    os.path.join(_MEMORY_DIR, "store.sqlite"),
+    check_same_thread=False,
+    isolation_level=None,
+)
+
+checkpointer = SqliteSaver(_checkpoint_conn)
+checkpointer.setup()
+
+store = SqliteStore(_store_conn)
+store.setup()
+
+
+def tenant_id_from_email(email: str) -> str:
+    """Match utils.helpers.create_tenant_folder tenant id derivation."""
 
     return email.replace("@", "_").replace(".", "_")
 
 
-def memory_file(email, document_id):
+def thread_id(email: str, document_id: str) -> str:
+    """Stable short-term memory thread for one user + document conversation."""
 
-    memory_dir = data_path(
-        "memory",
-        _tenant_id(email),
-    )
-
-    os.makedirs(memory_dir, exist_ok=True)
-
-    return os.path.join(
-        memory_dir,
-        f"{document_id}.json",
-    )
+    return f"{tenant_id_from_email(email)}:{document_id}"
 
 
-def legacy_memory_file(email):
+def invoke_config(email: str, document_id: str) -> dict:
+    """RunnableConfig fragment required by LangGraph when a checkpointer is set."""
 
-    return data_path(
-        "memory",
-        f"{_tenant_id(email)}.json",
-    )
-
-
-def load_memory(email, document_id):
-
-    if not document_id:
-        return []
-
-    path = memory_file(email, document_id)
-
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    legacy_path = legacy_memory_file(email)
-
-    if not os.path.exists(legacy_path):
-        return []
-
-    with open(legacy_path, "r", encoding="utf-8") as f:
-        history = json.load(f)
-
-    if history:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=4)
-
-        with open(legacy_path, "w", encoding="utf-8") as f:
-            json.dump([], f)
-
-    return history
-
-
-def save_memory(email, document_id, user, assistant):
-
-    if not document_id:
-        return
-
-    path = memory_file(email, document_id)
-
-    history = load_memory(email, document_id)
-
-    history.append(
-        {
-            "user": user,
-            "assistant": assistant,
+    return {
+        "configurable": {
+            "thread_id": thread_id(email, document_id),
         }
+    }
+
+
+def memory_namespace(email: str, document_id: str) -> tuple:
+    """Long-term Store namespace: isolated per tenant and document."""
+
+    return (
+        "memories",
+        tenant_id_from_email(email),
+        document_id or "_none",
     )
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(
-            history,
-            f,
-            indent=4,
-        )
 
+def _format_history(history) -> str:
 
-def delete_memory(email, document_id):
-
-    if not document_id:
-        return False
-
-    path = memory_file(email, document_id)
-
-    if os.path.isfile(path):
-        try:
-            os.remove(path)
-            return True
-        except OSError:
-            return False
-
-    return False
-
-
-def _format_history(history):
+    if not history:
+        return "No conversation yet."
 
     lines = []
 
@@ -116,25 +91,131 @@ def _format_history(history):
     return "\n".join(lines)
 
 
-def answer_from_memory(email, document_id, question):
+def read_long_term_notes(email: str, document_id: str, runtime_store=None) -> str:
+    """Read long-term notes for a tenant/document from the LangGraph Store."""
 
-    history = load_memory(email, document_id)
+    active_store = runtime_store if runtime_store is not None else store
+    item = active_store.get(memory_namespace(email, document_id), LONG_TERM_NOTES_KEY)
 
-    if not history:
-        return "We have not talked about this document yet, so there is no earlier question to reference."
+    if not item:
+        return ""
+
+    items = item.value.get("items") or []
+
+    if not items:
+        return ""
+
+    lines = []
+
+    for index, note in enumerate(items, start=1):
+        lines.append(f"Note {index}")
+        lines.append(f"User: {note.get('user', '')}")
+        lines.append(f"Assistant: {note.get('assistant', '')}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def update_long_term_memory(
+    email: str,
+    document_id: str,
+    user: str,
+    assistant: str,
+    runtime_store=None,
+) -> None:
+    """Append a condensed turn into long-term Store notes (capped)."""
+
+    if not document_id:
+        return
+
+    active_store = runtime_store if runtime_store is not None else store
+    ns = memory_namespace(email, document_id)
+    existing = active_store.get(ns, LONG_TERM_NOTES_KEY)
+    items = list((existing.value.get("items") if existing else None) or [])
+
+    items.append(
+        {
+            "user": (user or "")[:300],
+            "assistant": (assistant or "")[:500],
+        }
+    )
+    # Keep a bounded long-term window for the testing store.
+    items = items[-30:]
+
+    active_store.put(ns, LONG_TERM_NOTES_KEY, {"items": items})
+
+
+def load_memory(email: str, document_id: str) -> list:
+    """Return conversation history from the short-term checkpointer.
+
+    Shape matches the old JSON memory for the frontend:
+    [{"user": "...", "assistant": "..."}, ...]
+    """
+
+    if not document_id:
+        return []
+
+    config = invoke_config(email, document_id)
+    checkpoint_tuple = checkpointer.get_tuple(config)
+
+    if not checkpoint_tuple:
+        return []
+
+    values = checkpoint_tuple.checkpoint.get("channel_values") or {}
+    history = values.get("history") or []
+
+    return list(history)
+
+
+def delete_memory(email: str, document_id: str) -> bool:
+    """Clear short-term checkpoints and long-term Store entries for one document."""
+
+    if not document_id:
+        return False
+
+    tid = thread_id(email, document_id)
+    checkpointer.delete_thread(tid)
+
+    ns = memory_namespace(email, document_id)
+
+    for item in store.search(ns):
+        store.delete(ns, item.key)
+
+    return True
+
+
+def answer_from_memory(
+    question: str,
+    history: Optional[list] = None,
+    long_term_notes: str = "",
+) -> str:
+    """Answer questions about this chat using short-term + long-term memory."""
+
+    history = history or []
+
+    if not history and not long_term_notes:
+        return (
+            "We have not talked about this document yet, "
+            "so there is no earlier question to reference."
+        )
 
     conversation = _format_history(history)
+    long_term_block = long_term_notes.strip() or "None yet."
 
-    prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the conversation history below.
+    prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the conversation history and long-term notes below.
 
 Rules:
 - If they ask about their first question, use Turn 1.
 - If they ask about their last or previous question, use the latest relevant turn.
 - Quote or paraphrase their actual words when helpful.
-- If the answer is not in the history, say so clearly.
+- Prefer short-term conversation history for recent turns; use long-term notes for older retained context.
+- If the answer is not in the history or notes, say so clearly.
 
-Conversation history:
+Conversation history (short-term):
 {conversation}
+
+Long-term notes:
+{long_term_block}
 
 User question: {question}
 
@@ -145,23 +226,28 @@ Answer:"""
     return response.content.strip()
 
 
-def answer_general(email, document_id, question):
+def answer_general(
+    question: str,
+    history: Optional[list] = None,
+    long_term_notes: str = "",
+) -> str:
+    """Handle greetings / general questions with conversation awareness."""
 
-    history = load_memory(email, document_id)
-    conversation = (
-        _format_history(history)
-        if history
-        else "No conversation yet."
-    )
+    history = history or []
+    conversation = _format_history(history) if history else "No conversation yet."
+    long_term_block = long_term_notes.strip() or "None yet."
 
     prompt = f"""You are a Knowledge Assistant helping users with uploaded documents.
 
-Conversation so far:
+Conversation so far (short-term):
 {conversation}
+
+Long-term notes:
+{long_term_block}
 
 User question: {question}
 
-If the question is about this chat, answer from the conversation history.
+If the question is about this chat, answer from the conversation history or long-term notes.
 If it is a greeting or general question, respond helpfully and briefly.
 If they need document content, suggest asking a specific question about the document."""
 

@@ -20,6 +20,9 @@ chroma_db/
 # User memory / interaction data
 memory/
 
+# LangGraph SQLite checkpoint + store (local persistence)
+langgraph_memory/
+
 # Secrets / SSH keys
 *.pem
 *.key

@@ -20,8 +20,8 @@ from vectorstore.chroma_db import (
 )
 
 from agents.memory_agent import (
+    invoke_config,
     load_memory,
-    save_memory,
 )
 
 from agents.voice_agent import (
@@ -707,15 +707,18 @@ else:
 
                     "question": question,
 
-                    "db": st.session_state.db,
-
                     "email": email,
 
                     "document_id":
 
                     st.session_state.selected_document_id,
 
-                }
+                },
+
+                config=invoke_config(
+                    email,
+                    st.session_state.selected_document_id,
+                ),
 
             )
 
@@ -763,16 +766,9 @@ else:
 
 
 
-            save_memory(
-
+            st.session_state.history = load_memory(
                 email,
-
                 st.session_state.selected_document_id,
-
-                question,
-
-                answer,
-
             )
 
 

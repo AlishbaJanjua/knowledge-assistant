@@ -12,7 +12,7 @@ from pydantic import BaseModel, EmailStr
 
 from fastapi.responses import FileResponse
 from agents.chunking_agent import analyze_and_chunk
-from agents.memory_agent import delete_memory, load_memory, save_memory
+from agents.memory_agent import delete_memory, invoke_config, load_memory
 from agents.voice_agent import speech_to_text, text_to_speech
 from graph.workflow import app as agent_graph
 from loaders.loader import load_document
@@ -265,23 +265,18 @@ def chat(body: ChatRequest):
             detail="Document knowledge base not found.",
         )
 
+    # Same thread_id across turns for this email+document (short-term memory).
+    # db is loaded inside the graph (not passed) so checkpoints stay serializable.
     result = agent_graph.invoke(
         {
             "question": body.question,
-            "db": db,
             "email": body.email,
             "document_id": body.document_id,
-        }
+        },
+        config=invoke_config(body.email, body.document_id),
     )
 
     answer = result["answer"]
-
-    save_memory(
-        body.email,
-        body.document_id,
-        body.question,
-        answer,
-    )
 
     speech = _speech_payload(answer)
 

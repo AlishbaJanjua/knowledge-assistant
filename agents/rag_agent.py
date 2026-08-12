@@ -31,7 +31,21 @@ def _context_from_document(doc):
     return doc.page_content or ""
 
 
-def ask_question(db, question):
+def _format_recent_history(history, limit=6):
+
+    if not history:
+        return ""
+
+    lines = []
+
+    for chat in history[-limit:]:
+        lines.append(f"User: {chat.get('user', '')}")
+        lines.append(f"Assistant: {chat.get('assistant', '')}")
+
+    return "\n".join(lines)
+
+
+def ask_question(db, question, history=None):
 
 
     summary_words = [
@@ -69,12 +83,20 @@ def ask_question(db, question):
             ]
         )
 
-
+    recent = _format_recent_history(history)
+    history_block = (
+        f"\nRecent conversation (for follow-ups only):\n{recent}\n"
+        if recent
+        else ""
+    )
 
     prompt = f"""
 You are a document assistant.
 
 Answer using ONLY this document context.
+Use recent conversation only to resolve follow-up references
+(e.g. "that", "it", "the previous topic"). Do not invent document facts
+from chat history alone.
 
 If the question asks for an overview,
 identify the major topics from the entire document.
@@ -82,7 +104,7 @@ identify the major topics from the entire document.
 Context:
 
 {context}
-
+{history_block}
 
 Question:
 

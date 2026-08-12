@@ -16,7 +16,7 @@ def data_path(*parts: str) -> str:
 
 def ensure_data_dirs():
 
-    for name in ("uploads", "memory", "chroma_db"):
+    for name in ("uploads", "chroma_db", "langgraph_memory"):
         os.makedirs(data_path(name), exist_ok=True)
 
 
