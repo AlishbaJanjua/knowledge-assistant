@@ -5,11 +5,15 @@
 
     const state = {
         email: "",
+        // In-memory only for testing: refresh returns to login.
+        sessionToken: "",
+        account: null,
         selectedDocument: null,
         documents: [],
         listening: false,
         recognition: null,
         currentAudio: null,
+        tenantHint: new URLSearchParams(window.location.search).get("tenant") || "",
     };
 
     const emailGate = document.getElementById("emailGate");
@@ -44,8 +48,17 @@
 
     async function apiFetch(path, options = {}) {
         let response;
+        const headers = { ...(options.headers || {}) };
+
+        if (state.sessionToken) {
+            headers["X-Session-Token"] = state.sessionToken;
+        }
+
         try {
-            response = await fetch(`${API_URL}${path}`, options);
+            response = await fetch(`${API_URL}${path}`, {
+                ...options,
+                headers,
+            });
         } catch (_) {
             throw new Error("Cannot reach the Knowledge Assistant server.");
         }
@@ -56,6 +69,11 @@
                 const body = await response.json();
                 detail = body.detail || detail;
             } catch (_) {}
+
+            if (response.status === 401) {
+                state.sessionToken = "";
+            }
+
             throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
         }
 
@@ -346,17 +364,47 @@
         }
     }
 
-    function startSession(email) {
+    function startSession(email, account = null, sessionToken = null) {
         state.email = email;
+
+        if (sessionToken) {
+            state.sessionToken = sessionToken;
+        }
+
+        if (account) {
+            state.account = account;
+            applyWidgetBranding(account.widget || {}, account.company_name || "");
+        }
+
         emailGate.classList.add("hidden");
         app.classList.remove("hidden");
-        userEmailEl.textContent = email;
+        userEmailEl.textContent = account?.company_name
+            ? `${account.company_name} · ${email}`
+            : email;
         setComposerEnabled(false);
         openSidebar();
         loadDocuments().catch((err) => alert(err.message));
     }
 
-    let gateMode = "email";
+    function applyWidgetBranding(widget, companyName) {
+        const color = widget.primary_color || "#141414";
+        document.documentElement.style.setProperty("--accent", color);
+
+        if (widget.title) {
+            document.title = widget.title;
+            docTitle.textContent = widget.title;
+        }
+
+        if (widget.welcome_message && emptyState) {
+            emptyState.textContent = widget.welcome_message;
+        }
+
+        if (companyName) {
+            gateLabel.textContent = `${companyName} login`;
+        }
+    }
+
+    let gateStep = "form";
     let pendingEmail = "";
 
     function showGateError(message) {
@@ -370,7 +418,7 @@
     }
 
     function showOtpStep(email) {
-        gateMode = "otp";
+        gateStep = "otp";
         pendingEmail = email;
         gateLabel.textContent = `Enter the code sent to ${email}`;
         emailInput.readOnly = true;
@@ -380,21 +428,11 @@
         otpInput.focus();
     }
 
-    function resetGateToEmail() {
-        gateMode = "email";
-        pendingEmail = "";
-        gateLabel.textContent = "Enter your email to continue";
-        emailInput.readOnly = false;
-        otpStep.classList.add("hidden");
-        otpInput.value = "";
-        continueBtn.textContent = "Continue";
-    }
-
-    async function requestOtp(email) {
+    async function requestLoginOtp(email) {
         const response = await fetch(`${API_URL}/api/auth/request-otp`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email }),
+            body: JSON.stringify({ email, purpose: "login" }),
         });
 
         let payload = {};
@@ -412,11 +450,11 @@
         return payload;
     }
 
-    async function verifyOtpCode(email, otp) {
+    async function verifyLoginOtp(email, otp) {
         const response = await fetch(`${API_URL}/api/auth/verify-otp`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, otp }),
+            body: JSON.stringify({ email, otp, purpose: "login" }),
         });
 
         let payload = {};
@@ -437,7 +475,7 @@
     continueBtn.addEventListener("click", async () => {
         emailError.hidden = true;
 
-        if (gateMode === "email") {
+        if (gateStep === "form") {
             const email = emailInput.value.trim();
 
             if (!isValidEmail(email)) {
@@ -449,11 +487,11 @@
             continueBtn.textContent = "Sending…";
 
             try {
-                await requestOtp(email);
+                await requestLoginOtp(email);
                 showOtpStep(email);
             } catch (err) {
                 showGateError(err.message || "Could not send verification code.");
-                continueBtn.textContent = "Continue";
+                continueBtn.textContent = "Send code";
             } finally {
                 setGateBusy(false);
             }
@@ -472,9 +510,12 @@
         continueBtn.textContent = "Verifying…";
 
         try {
-            const result = await verifyOtpCode(pendingEmail, otp);
-            startSession(result.email || pendingEmail);
-            resetGateToEmail();
+            const result = await verifyLoginOtp(pendingEmail, otp);
+            startSession(
+                result.account?.email || pendingEmail,
+                result.account || null,
+                result.session_token || null,
+            );
         } catch (err) {
             showGateError(err.message || "Invalid verification code.");
             continueBtn.textContent = "Verify";
@@ -490,7 +531,7 @@
         setGateBusy(true);
 
         try {
-            await requestOtp(pendingEmail);
+            await requestLoginOtp(pendingEmail);
             showGateError("A new code was sent.");
             otpInput.focus();
         } catch (err) {
@@ -507,6 +548,21 @@
     otpInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter") continueBtn.click();
     });
+
+    if (state.tenantHint) {
+        fetch(`${API_URL}/api/widget-config/${encodeURIComponent(state.tenantHint)}`)
+            .then((response) => {
+                if (!response.ok) throw new Error("config");
+                return response.json();
+            })
+            .then((data) => {
+                applyWidgetBranding(data.widget || {}, data.company_name || "");
+            })
+            .catch(() => {});
+    }
+
+    // Clear any previously persisted widget auth token from earlier builds.
+    sessionStorage.removeItem("ka_widget_session");
 
     document.getElementById("loadDocuments").addEventListener("click", () => {
         loadDocuments().catch((err) => alert(err.message));

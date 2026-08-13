@@ -16,6 +16,7 @@ from langgraph.store.sqlite import SqliteStore
 
 from backend.config import data_path
 from backend.llm import llm
+from backend.prompts import apply_tenant_instructions
 
 # Long-term Store key within each tenant/document namespace.
 LONG_TERM_NOTES_KEY = "notes"
@@ -188,6 +189,8 @@ def answer_from_memory(
     question: str,
     history: Optional[list] = None,
     long_term_notes: str = "",
+    company_name: str = "",
+    custom_prompt: str = "",
 ) -> str:
     """Answer questions about this chat using short-term + long-term memory."""
 
@@ -202,7 +205,7 @@ def answer_from_memory(
     conversation = _format_history(history)
     long_term_block = long_term_notes.strip() or "None yet."
 
-    prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the conversation history and long-term notes below.
+    core_prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the conversation history and long-term notes below.
 
 Rules:
 - If they ask about their first question, use Turn 1.
@@ -221,6 +224,12 @@ User question: {question}
 
 Answer:"""
 
+    prompt = apply_tenant_instructions(
+        core_prompt,
+        company_name=company_name,
+        custom_prompt=custom_prompt,
+    )
+
     response = llm.invoke(prompt)
 
     return response.content.strip()
@@ -230,6 +239,8 @@ def answer_general(
     question: str,
     history: Optional[list] = None,
     long_term_notes: str = "",
+    company_name: str = "",
+    custom_prompt: str = "",
 ) -> str:
     """Handle greetings / general questions with conversation awareness."""
 
@@ -237,7 +248,7 @@ def answer_general(
     conversation = _format_history(history) if history else "No conversation yet."
     long_term_block = long_term_notes.strip() or "None yet."
 
-    prompt = f"""You are a Knowledge Assistant helping users with uploaded documents.
+    core_prompt = f"""You are a Knowledge Assistant helping users with uploaded documents.
 
 Conversation so far (short-term):
 {conversation}
@@ -250,6 +261,12 @@ User question: {question}
 If the question is about this chat, answer from the conversation history or long-term notes.
 If it is a greeting or general question, respond helpfully and briefly.
 If they need document content, suggest asking a specific question about the document."""
+
+    prompt = apply_tenant_instructions(
+        core_prompt,
+        company_name=company_name,
+        custom_prompt=custom_prompt,
+    )
 
     response = llm.invoke(prompt)
 

@@ -1,5 +1,9 @@
 import hashlib
 
+from tenants.accounts import tenant_id_from_email
+
+
 def get_tenant_id(email):
-    email = email.strip().lower()
-    return hashlib.md5(email.encode()).hexdigest()
+    """Legacy helper — same stable id used by accounts/uploads/Chroma/memory."""
+
+    return tenant_id_from_email(email)

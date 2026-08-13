@@ -293,21 +293,63 @@ The chatbot is available as a CDN-hosted JavaScript widget using jsDelivr.
 ### CDN URL
 
 ```text
+https://cdn.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant@main/embed/chatbot.js
+```
+
+Equivalent (defaults to the default branch):
+
+```text
 https://cdn.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant/embed/chatbot.js
 ```
 
-### Embed Code
+> After you push embed changes to GitHub, jsDelivr may cache the old file briefly. Use `@main` or purge: `https://purge.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant@main/embed/chatbot.js`
 
-Add the following script to any HTML website:
+### Embed Code (copy-paste)
+
+Customers paste this into their website. Replace `YOUR_TENANT_ID` and keep `data-api` pointed at your live FastAPI backend:
 
 ```html
 <script
-    src="https://cdn.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant/embed/chatbot.js"
-    data-api="http://92.4.88.188:8000">
+    src="https://cdn.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant@main/embed/chatbot.js"
+    data-api="http://92.4.88.188:8000"
+    data-tenant="YOUR_TENANT_ID">
 </script>
 ```
 
-The script automatically creates the chatbot widget on the website and connects it to the Knowledge Assistant backend running on the Oracle Cloud VPS.
+### Required attributes
+
+| Attribute | Required | Purpose |
+|-----------|----------|---------|
+| `src` | yes | jsDelivr CDN URL for `embed/chatbot.js` |
+| `data-api` | yes | Your FastAPI / VPS base URL (never the jsDelivr host) |
+| `data-tenant` | yes | Tenant id for that company account |
+
+### What is `data-tenant`?
+
+`data-tenant` is the account **`tenant_id`**.
+
+- It is created when the company registers.
+- Format: the account email with `@` and `.` replaced by `_`  
+  Example: `acme@company.com` → `acme_company_com`
+- After login, it is shown in the Knowledge Assistant sidebar under the company/email line as **Tenant ID**.
+- It is also returned by `GET /api/account/me` as `account.tenant_id`.
+
+The CDN script uses `data-tenant` only to:
+
+1. Load **public** widget appearance from `GET /api/widget-config/{tenant_id}` (title, welcome message, primary color, position)
+2. Open `GET /widget?tenant={tenant_id}` in an iframe on your VPS
+
+It does **not** include custom prompts, OTP codes, session tokens, or other secrets.
+
+### Local embed (without jsDelivr)
+
+```html
+<script
+    src="http://127.0.0.1:8000/embed/chatbot.js"
+    data-api="http://127.0.0.1:8000"
+    data-tenant="YOUR_TENANT_ID">
+</script>
+```
 
 ### CDN Integration Flow
 
@@ -315,19 +357,20 @@ The script automatically creates the chatbot widget on the website and connects 
 External Website
        │
        ▼
-   CDN Script
+   CDN Script (jsDelivr)
        │
        ▼
-   chatbot.js
+   chatbot.js  (+ data-api, data-tenant)
        │
-       ▼
- Oracle Cloud VPS
+       ├── GET {data-api}/api/widget-config/{tenant_id}   (public branding)
        │
-       ▼
- FastAPI /widget
-       │
-       ▼
- Knowledge Assistant
+       └── iframe → {data-api}/widget?tenant={tenant_id}
+                      │
+                      ▼
+                 FastAPI on VPS
+                      │
+                      ▼
+              Login OTP + RAG chat
 ```
 
 The CDN embed has been tested on a separate website and successfully loads and communicates with the chatbot.
@@ -464,7 +507,7 @@ https://github.com/AlishbaJanjua/knowledge-assistant
 
 **CDN Embed:**
 
-https://cdn.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant/embed/chatbot.js
+https://cdn.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant@main/embed/chatbot.js
 
 ---
 

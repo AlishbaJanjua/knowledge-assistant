@@ -25,7 +25,7 @@ OTP_REQUEST_COOLDOWN_SECONDS = 60
 OTP_MAX_VERIFY_ATTEMPTS = 5
 
 _lock = threading.Lock()
-# email -> { hash, expires_at, last_sent_at, attempts }
+# email -> { hash, expires_at, last_sent_at, attempts, purpose, pending }
 _otp_store: dict[str, dict] = {}
 
 
@@ -72,12 +72,21 @@ def cooldown_remaining(email: str) -> int:
         return max(0, wait)
 
 
-def create_and_store_otp(email: str) -> tuple[str, int]:
+def create_and_store_otp(
+    email: str,
+    *,
+    purpose: str = "login",
+    pending: Optional[dict] = None,
+) -> tuple[str, int]:
     """Create a new OTP for email. Returns (otp, expires_in_seconds)."""
 
     key = _normalize_email(email)
     otp = generate_otp()
     now = time.time()
+    purpose_key = (purpose or "login").strip().lower()
+
+    if purpose_key not in ("login", "register"):
+        purpose_key = "login"
 
     with _lock:
         _purge_expired(now)
@@ -86,15 +95,42 @@ def create_and_store_otp(email: str) -> tuple[str, int]:
             "expires_at": now + OTP_TTL_SECONDS,
             "last_sent_at": now,
             "attempts": 0,
+            "purpose": purpose_key,
+            "pending": pending,
         }
 
     return otp, OTP_TTL_SECONDS
 
 
-def verify_otp(email: str, otp: str) -> tuple[bool, str]:
+def peek_otp_meta(email: str) -> Optional[dict]:
+    """Return non-secret OTP metadata (purpose/pending) if a code is pending."""
+
+    key = _normalize_email(email)
+    now = time.time()
+
+    with _lock:
+        _purge_expired(now)
+        record = _otp_store.get(key)
+
+        if not record:
+            return None
+
+        return {
+            "purpose": record.get("purpose", "login"),
+            "pending": record.get("pending"),
+            "expires_at": record.get("expires_at"),
+        }
+
+
+def verify_otp(
+    email: str,
+    otp: str,
+    *,
+    expected_purpose: Optional[str] = None,
+) -> tuple[bool, str, Optional[dict]]:
     """Verify OTP. On success the code is consumed (single-use).
 
-    Returns (ok, error_code) where error_code is empty on success.
+    Returns (ok, error_code, pending_payload).
     """
 
     key = _normalize_email(email)
@@ -102,34 +138,41 @@ def verify_otp(email: str, otp: str) -> tuple[bool, str]:
     now = time.time()
 
     if not code.isdigit() or len(code) != OTP_LENGTH:
-        return False, "invalid"
+        return False, "invalid", None
 
     with _lock:
         _purge_expired(now)
         record = _otp_store.get(key)
 
         if not record:
-            return False, "expired"
+            return False, "expired", None
 
         if record["expires_at"] <= now:
             del _otp_store[key]
-            return False, "expired"
+            return False, "expired", None
+
+        if expected_purpose:
+            purpose = (record.get("purpose") or "login").lower()
+
+            if purpose != expected_purpose.strip().lower():
+                return False, "purpose", None
 
         if record["attempts"] >= OTP_MAX_VERIFY_ATTEMPTS:
             del _otp_store[key]
-            return False, "locked"
+            return False, "locked", None
 
         record["attempts"] += 1
 
         if not secrets.compare_digest(record["hash"], _hash_otp(key, code)):
             if record["attempts"] >= OTP_MAX_VERIFY_ATTEMPTS:
                 del _otp_store[key]
-                return False, "locked"
-            return False, "invalid"
+                return False, "locked", None
+            return False, "invalid", None
 
+        pending = record.get("pending")
         # Single-use: remove after successful verification.
         del _otp_store[key]
-        return True, ""
+        return True, "", pending
 
 
 def clear_otp(email: str) -> None:

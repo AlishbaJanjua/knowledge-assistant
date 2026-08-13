@@ -22,6 +22,8 @@ class AgentState(TypedDict):
     question: str
     email: str
     document_id: str
+    company_name: str
+    custom_prompt: str
     route: Optional[str]
     answer: Optional[str]
     # Short-term conversation turns accumulated via the checkpointer.
@@ -29,7 +31,7 @@ class AgentState(TypedDict):
 
 
 def router_node(state: AgentState):
-
+    # Router stays free of tenant prompts so classification cannot be steered away.
     route = route_question(state["question"])
 
     return {"route": route}
@@ -49,6 +51,8 @@ def rag_node(state: AgentState):
             db,
             state["question"],
             history=history,
+            company_name=state.get("company_name") or "",
+            custom_prompt=state.get("custom_prompt") or "",
         )
 
     runtime_store = get_store()
@@ -85,6 +89,8 @@ def memory_node(state: AgentState):
         state["question"],
         history,
         long_term_notes,
+        company_name=state.get("company_name") or "",
+        custom_prompt=state.get("custom_prompt") or "",
     )
 
     update_long_term_memory(
@@ -120,6 +126,8 @@ def general_node(state: AgentState):
         state["question"],
         history,
         long_term_notes,
+        company_name=state.get("company_name") or "",
+        custom_prompt=state.get("custom_prompt") or "",
     )
 
     update_long_term_memory(

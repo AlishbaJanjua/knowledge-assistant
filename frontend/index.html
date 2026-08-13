@@ -11,17 +11,54 @@
 </head>
 <body>
 
-    <!-- Email gate (OTP) -->
+    <!-- Auth gate: Login / Create account -->
     <div class="gate" id="gate">
-        <div class="gate-card">
-            <p class="gate-label" id="gate-label">Continue with your email</p>
-            <input type="email" id="email-input" placeholder="you@example.com" autocomplete="email">
-            <div id="otp-step" class="otp-step hidden">
-                <input type="text" id="otp-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code">
-                <button type="button" class="btn-link" id="otp-resend">Resend code</button>
+        <div class="gate-card gate-card-wide">
+            <div id="auth-choose" class="auth-choose">
+                <p class="gate-label" id="choose-label">Welcome</p>
+                <div class="gate-tabs" id="gate-tabs">
+                    <button type="button" class="gate-tab" data-mode="login" id="tab-login">Login</button>
+                    <button type="button" class="gate-tab" data-mode="register" id="tab-register">Create an account</button>
+                </div>
             </div>
-            <button type="button" id="email-submit">Continue</button>
-            <p class="gate-error" id="gate-error" hidden></p>
+
+            <div id="auth-flow" class="auth-flow hidden">
+                <button type="button" class="btn-link auth-back" id="auth-back">← Back</button>
+                <p class="gate-label" id="gate-label">Login with your email</p>
+
+                <div id="register-fields" class="register-fields hidden">
+                    <input type="text" id="company-input" placeholder="Company name" autocomplete="organization">
+                    <textarea id="prompt-input" rows="3" placeholder="Company chatbot instructions (optional)"></textarea>
+
+                    <p class="gate-sublabel">Widget customization</p>
+                    <input type="text" id="widget-title-input" placeholder="Chatbot title" value="Knowledge Assistant">
+                    <input type="text" id="widget-welcome-input" placeholder="Welcome message" value="Ask me anything about your documents.">
+                    <div class="widget-row">
+                        <label class="widget-field">
+                            <span>Accent color</span>
+                            <input type="color" id="widget-color-input" value="#141414">
+                        </label>
+                        <label class="widget-field">
+                            <span>Position</span>
+                            <select id="widget-position-input">
+                                <option value="bottom-right" selected>Bottom right</option>
+                                <option value="bottom-left">Bottom left</option>
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <input type="email" id="email-input" placeholder="you@example.com" autocomplete="email">
+
+                <div id="otp-step" class="otp-step hidden">
+                    <input type="text" id="otp-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code">
+                    <button type="button" class="btn-link" id="otp-resend">Resend code</button>
+                </div>
+
+                <button type="button" id="email-submit">Send code</button>
+                <p class="gate-error" id="gate-error" hidden></p>
+                <p class="gate-hint" id="gate-hint">We'll email a one-time code to verify it's you.</p>
+            </div>
         </div>
     </div>
 
@@ -45,6 +82,7 @@
                     <span class="upload-zone-hint">PDF, DOCX, PPTX, TXT</span>
                 </label>
                 <p class="user-email" id="user-email"></p>
+                <p class="tenant-id" id="tenant-id" hidden></p>
             </div>
         </aside>
 

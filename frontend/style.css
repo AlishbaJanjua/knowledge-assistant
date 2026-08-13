@@ -60,6 +60,44 @@ body {
     box-shadow: var(--shadow);
 }
 
+.gate-card-wide {
+    width: min(440px, 92vw);
+}
+
+.gate-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    margin-bottom: 0;
+}
+
+.gate-tab {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--accent);
+    color: var(--user-text);
+    font-family: inherit;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.gate-tab:hover {
+    opacity: 0.88;
+}
+
+.auth-choose.hidden,
+.auth-flow.hidden {
+    display: none;
+}
+
+.auth-back {
+    display: inline-block;
+    margin-bottom: 0.75rem;
+}
+
 .gate-label {
     font-size: 0.9375rem;
     font-weight: 500;
@@ -67,7 +105,27 @@ body {
     margin-bottom: 1rem;
 }
 
-.gate-card input {
+.gate-sublabel {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0.75rem 0 0.5rem;
+}
+
+.gate-hint {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+}
+
+.register-fields.hidden,
+.otp-step.hidden {
+    display: none;
+}
+
+.register-fields textarea,
+.gate-card input,
+.gate-card select {
     width: 100%;
     padding: 0.75rem 1rem;
     border: 1px solid var(--border);
@@ -77,9 +135,38 @@ body {
     outline: none;
     transition: border-color 0.15s;
     margin-bottom: 0.75rem;
+    background: var(--surface);
+    color: var(--text);
 }
 
-.gate-card input:focus {
+.register-fields textarea {
+    resize: vertical;
+    min-height: 72px;
+}
+
+.widget-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.widget-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.widget-field input,
+.widget-field select {
+    margin-bottom: 0;
+}
+
+.gate-card input:focus,
+.gate-card textarea:focus,
+.gate-card select:focus {
     border-color: var(--text-tertiary);
 }
 
@@ -324,6 +411,16 @@ body {
     text-overflow: ellipsis;
     white-space: nowrap;
     padding: 0 0.25rem;
+}
+
+.tenant-id {
+    font-size: 0.625rem;
+    color: var(--text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0.15rem 0.25rem 0;
+    opacity: 0.9;
 }
 
 /* ── Main ── */

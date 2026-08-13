@@ -4,13 +4,12 @@ import os
 import time
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
-from fastapi.responses import FileResponse
 from agents.chunking_agent import analyze_and_chunk
 from agents.memory_agent import delete_memory, invoke_config, load_memory
 from agents.voice_agent import speech_to_text, text_to_speech
@@ -25,6 +24,16 @@ from backend.otp import (
 )
 from graph.workflow import app as agent_graph
 from loaders.loader import load_document
+from tenants.accounts import (
+    account_exists,
+    create_account,
+    get_account_by_email,
+    get_account_by_tenant_id,
+    public_account_view,
+    public_widget_view,
+    update_account,
+)
+from tenants.sessions import create_session_token, verify_session_token
 from utils.helpers import (
     create_tenant_folder,
     delete_upload,
@@ -91,13 +100,31 @@ class SpeakRequest(BaseModel):
     text: str
 
 
+class WidgetSettings(BaseModel):
+    title: Optional[str] = None
+    welcome_message: Optional[str] = None
+    primary_color: Optional[str] = None
+    position: Optional[str] = None
+
+
 class OtpRequest(BaseModel):
     email: EmailStr
+    purpose: str = "login"
+    company_name: Optional[str] = None
+    custom_prompt: Optional[str] = None
+    widget: Optional[WidgetSettings] = None
 
 
 class OtpVerifyRequest(BaseModel):
     email: EmailStr
     otp: str
+    purpose: str = "login"
+
+
+class AccountUpdateRequest(BaseModel):
+    company_name: Optional[str] = None
+    custom_prompt: Optional[str] = None
+    widget: Optional[WidgetSettings] = None
 
 
 def _tenant_from_email(email: str):
@@ -105,6 +132,55 @@ def _tenant_from_email(email: str):
     tenant_id, folder = create_tenant_folder(email)
     sync_registry_from_folder(tenant_id, folder)
     return tenant_id, folder
+
+
+def _extract_token(
+    authorization: Optional[str],
+    x_session_token: Optional[str],
+) -> Optional[str]:
+
+    if x_session_token and x_session_token.strip():
+        return x_session_token.strip()
+
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+
+    return None
+
+
+def require_account(
+    authorization: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token"),
+) -> dict:
+    """Resolve the authenticated account from the session token only."""
+
+    token = _extract_token(authorization, x_session_token)
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    session = verify_session_token(token)
+
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+
+    account = get_account_by_email(session["email"])
+
+    if not account:
+        raise HTTPException(status_code=401, detail="Account not found.")
+
+    if account["tenant_id"] != session["tenant_id"]:
+        raise HTTPException(status_code=401, detail="Invalid session.")
+
+    return account
+
+
+def _assert_email_matches_account(account: dict, email: str) -> None:
+    if str(email).strip().lower() != account["email"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Email does not match the authenticated account.",
+        )
 
 
 def _speech_payload(text: str) -> dict:
@@ -129,6 +205,31 @@ def _speech_payload(text: str) -> dict:
     }
 
 
+def _otp_error(reason: str) -> HTTPException:
+    if reason == "expired":
+        return HTTPException(
+            status_code=400,
+            detail="Code expired or not found. Request a new one.",
+        )
+
+    if reason == "locked":
+        return HTTPException(
+            status_code=400,
+            detail="Too many invalid attempts. Request a new code.",
+        )
+
+    if reason == "purpose":
+        return HTTPException(
+            status_code=400,
+            detail="Verification code does not match this action. Request a new one.",
+        )
+
+    return HTTPException(
+        status_code=400,
+        detail="Invalid verification code.",
+    )
+
+
 @api.get("/api/health")
 def health():
 
@@ -140,20 +241,53 @@ def health():
 
 @api.post("/api/auth/request-otp")
 def request_otp(body: OtpRequest):
-    """Send a 6-digit OTP to the email used by the existing login gate."""
+    """Send OTP for login or account registration (existing Resend flow)."""
 
-    email = str(body.email)
+    email = str(body.email).strip().lower()
+    purpose = (body.purpose or "login").strip().lower()
+
+    if purpose not in ("login", "register"):
+        raise HTTPException(status_code=400, detail="purpose must be login or register.")
+
     wait = cooldown_remaining(email)
 
     if wait > 0:
         raise HTTPException(
             status_code=429,
-            detail=(
-                f"Please wait {wait} seconds before requesting another code."
-            ),
+            detail=f"Please wait {wait} seconds before requesting another code.",
         )
 
-    otp, expires_in = create_and_store_otp(email)
+    pending = None
+
+    if purpose == "login":
+        if not account_exists(email):
+            raise HTTPException(
+                status_code=404,
+                detail="No account found for this email. Please create an account.",
+            )
+    else:
+        if account_exists(email):
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email already exists. Please log in.",
+            )
+
+        company_name = (body.company_name or "").strip()
+
+        if not company_name:
+            raise HTTPException(status_code=400, detail="Company name is required.")
+
+        pending = {
+            "company_name": company_name,
+            "custom_prompt": (body.custom_prompt or "").strip(),
+            "widget": body.widget.model_dump(exclude_none=True) if body.widget else {},
+        }
+
+    otp, expires_in = create_and_store_otp(
+        email,
+        purpose=purpose,
+        pending=pending,
+    )
 
     try:
         send_otp_email(email, otp)
@@ -167,6 +301,7 @@ def request_otp(body: OtpRequest):
 
     return {
         "status": "sent",
+        "purpose": purpose,
         "expires_in": expires_in,
         "cooldown": OTP_REQUEST_COOLDOWN_SECONDS,
     }
@@ -174,32 +309,96 @@ def request_otp(body: OtpRequest):
 
 @api.post("/api/auth/verify-otp")
 def verify_otp_endpoint(body: OtpVerifyRequest):
-    """Verify the OTP for the email-gate login. Code is single-use."""
+    """Verify OTP, then login or create the account and issue a session."""
 
-    ok, reason = verify_otp(str(body.email), body.otp)
+    email = str(body.email).strip().lower()
+    purpose = (body.purpose or "login").strip().lower()
 
-    if ok:
-        return {
-            "status": "verified",
-            "email": str(body.email).strip().lower(),
-        }
+    if purpose not in ("login", "register"):
+        raise HTTPException(status_code=400, detail="purpose must be login or register.")
 
-    if reason == "expired":
-        raise HTTPException(
-            status_code=400,
-            detail="Code expired or not found. Request a new one.",
-        )
-
-    if reason == "locked":
-        raise HTTPException(
-            status_code=400,
-            detail="Too many invalid attempts. Request a new code.",
-        )
-
-    raise HTTPException(
-        status_code=400,
-        detail="Invalid verification code.",
+    ok, reason, pending = verify_otp(
+        email,
+        body.otp,
+        expected_purpose=purpose,
     )
+
+    if not ok:
+        raise _otp_error(reason)
+
+    if purpose == "login":
+        account = get_account_by_email(email)
+
+        if not account:
+            raise HTTPException(
+                status_code=404,
+                detail="No account found for this email. Please create an account.",
+            )
+    else:
+        if not pending or not pending.get("company_name"):
+            raise HTTPException(
+                status_code=400,
+                detail="Registration details expired. Start create-account again.",
+            )
+
+        try:
+            account = create_account(
+                email=email,
+                company_name=pending["company_name"],
+                custom_prompt=pending.get("custom_prompt") or "",
+                widget=pending.get("widget") or {},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Ensure tenant upload folder exists for the new account.
+        _tenant_from_email(account["email"])
+
+    token = create_session_token(account["email"], account["tenant_id"])
+
+    return {
+        "status": "verified",
+        "purpose": purpose,
+        "session_token": token,
+        "account": public_account_view(account),
+    }
+
+
+@api.get("/api/account/me")
+def get_my_account(account: dict = Depends(require_account)):
+
+    return {"account": public_account_view(account)}
+
+
+@api.put("/api/account/config")
+def update_my_account(
+    body: AccountUpdateRequest,
+    account: dict = Depends(require_account),
+):
+
+    try:
+        updated = update_account(
+            account["email"],
+            company_name=body.company_name,
+            custom_prompt=body.custom_prompt,
+            widget=body.widget.model_dump(exclude_none=True) if body.widget else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"account": public_account_view(updated)}
+
+
+@api.get("/api/widget-config/{tenant_id}")
+def get_widget_config(tenant_id: str):
+    """Public widget appearance for embeds (no custom prompt / secrets)."""
+
+    account = get_account_by_tenant_id(tenant_id)
+
+    if not account:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+
+    return public_widget_view(account)
 
 
 @api.get("/widget")
@@ -209,10 +408,15 @@ def chatbot_widget():
         os.path.join(FRONTEND_DIR, "widget.html")
     )
 
-@api.post("/api/documents")
-def get_documents(body: EmailRequest):
 
-    tenant_id, folder = _tenant_from_email(body.email)
+@api.post("/api/documents")
+def get_documents(
+    body: EmailRequest,
+    account: dict = Depends(require_account),
+):
+
+    _assert_email_matches_account(account, body.email)
+    tenant_id, folder = _tenant_from_email(account["email"])
     uploads = list_uploads(tenant_id)
 
     return {
@@ -230,15 +434,19 @@ def get_documents(body: EmailRequest):
 
 
 @api.delete("/api/documents")
-def remove_document(body: DeleteDocumentRequest):
+def remove_document(
+    body: DeleteDocumentRequest,
+    account: dict = Depends(require_account),
+):
 
-    tenant_id, _ = _tenant_from_email(body.email)
+    _assert_email_matches_account(account, body.email)
+    tenant_id, _ = _tenant_from_email(account["email"])
     deleted = delete_upload(tenant_id, body.document_id)
 
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found.")
 
-    delete_memory(body.email, body.document_id)
+    delete_memory(account["email"], body.document_id)
     delete_vectorstore(tenant_id, body.document_id)
 
     return {
@@ -252,10 +460,12 @@ def remove_document(body: DeleteDocumentRequest):
 def get_history(
     email: EmailStr = Query(...),
     document_id: str = Query(...),
+    account: dict = Depends(require_account),
 ):
 
-    tenant_id, _ = _tenant_from_email(email)
-    history = load_memory(email, document_id)
+    _assert_email_matches_account(account, email)
+    tenant_id, _ = _tenant_from_email(account["email"])
+    history = load_memory(account["email"], document_id)
     doc = get_document(tenant_id, document_id)
 
     return {
@@ -269,8 +479,10 @@ def get_history(
 async def upload_document(
     email: EmailStr = Form(...),
     file: UploadFile = File(...),
+    account: dict = Depends(require_account),
 ):
 
+    _assert_email_matches_account(account, email)
     extension = os.path.splitext(file.filename or "")[1].lower()
 
     if extension not in ALLOWED_EXTENSIONS:
@@ -279,7 +491,7 @@ async def upload_document(
             detail=f"Unsupported file type: {extension}",
         )
 
-    tenant_id, folder = _tenant_from_email(email)
+    tenant_id, folder = _tenant_from_email(account["email"])
     content = await file.read()
 
     if not content:
@@ -324,7 +536,6 @@ async def upload_document(
     return {
         "document_id": document_id,
         "filename": file.filename,
-        # `strategy` = applied (honest / backward-compatible for existing UI)
         "strategy": result["applied_strategy"],
         "recommended_strategy": result["recommended_strategy"],
         "applied_strategy": result["applied_strategy"],
@@ -335,9 +546,13 @@ async def upload_document(
 
 
 @api.post("/api/chat")
-def chat(body: ChatRequest):
+def chat(
+    body: ChatRequest,
+    account: dict = Depends(require_account),
+):
 
-    tenant_id, _ = _tenant_from_email(body.email)
+    _assert_email_matches_account(account, body.email)
+    tenant_id, _ = _tenant_from_email(account["email"])
     db = load_vectorstore(tenant_id, body.document_id)
 
     if not db:
@@ -346,15 +561,15 @@ def chat(body: ChatRequest):
             detail="Document knowledge base not found.",
         )
 
-    # Same thread_id across turns for this email+document (short-term memory).
-    # db is loaded inside the graph (not passed) so checkpoints stay serializable.
     result = agent_graph.invoke(
         {
             "question": body.question,
-            "email": body.email,
+            "email": account["email"],
             "document_id": body.document_id,
+            "company_name": account.get("company_name") or "",
+            "custom_prompt": account.get("custom_prompt") or "",
         },
-        config=invoke_config(body.email, body.document_id),
+        config=invoke_config(account["email"], body.document_id),
     )
 
     answer = result["answer"]

@@ -16,6 +16,9 @@ const API = getApiBase();
 
 const state = {
     email: "",
+    // In-memory only for testing: refresh returns to Login/Create Account.
+    sessionToken: "",
+    account: null,
     selectedDocumentId: null,
     documents: [],
     isRecording: false,
@@ -37,6 +40,19 @@ const gateLabel = document.getElementById("gate-label");
 const otpStep = document.getElementById("otp-step");
 const otpInput = document.getElementById("otp-input");
 const otpResend = document.getElementById("otp-resend");
+const registerFields = document.getElementById("register-fields");
+const companyInput = document.getElementById("company-input");
+const promptInput = document.getElementById("prompt-input");
+const widgetTitleInput = document.getElementById("widget-title-input");
+const widgetWelcomeInput = document.getElementById("widget-welcome-input");
+const widgetColorInput = document.getElementById("widget-color-input");
+const widgetPositionInput = document.getElementById("widget-position-input");
+const tabLogin = document.getElementById("tab-login");
+const tabRegister = document.getElementById("tab-register");
+const authChoose = document.getElementById("auth-choose");
+const authFlow = document.getElementById("auth-flow");
+const authBack = document.getElementById("auth-back");
+const gateHint = document.getElementById("gate-hint");
 const docList = document.getElementById("doc-list");
 const docEmpty = document.getElementById("doc-empty");
 const docTitle = document.getElementById("doc-title");
@@ -68,9 +84,19 @@ function isValidEmail(email) {
 
 async function apiFetch(path, options = {}) {
     let response;
+    const headers = {
+        ...(options.headers || {}),
+    };
+
+    if (state.sessionToken) {
+        headers["X-Session-Token"] = state.sessionToken;
+    }
 
     try {
-        response = await fetch(`${API}${path}`, options);
+        response = await fetch(`${API}${path}`, {
+            ...options,
+            headers,
+        });
     } catch (_) {
         throw new Error(
             "Cannot reach the server. Run the app with: python run.py — then open http://localhost:8000"
@@ -83,7 +109,16 @@ async function apiFetch(path, options = {}) {
             const body = await response.json();
             detail = body.detail || detail;
         } catch (_) {}
+
+        if (response.status === 401) {
+            clearSession();
+        }
+
         throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+
+    if (response.status === 204) {
+        return null;
     }
 
     return response.json();
@@ -513,11 +548,36 @@ async function selectDocument(documentId, filename, force = false) {
     renderMessages(data.history, data.strategy, data.reason);
 }
 
-function startSession(email) {
+function startSession(email, account = null, sessionToken = null) {
     state.email = email;
+
+    if (sessionToken) {
+        state.sessionToken = sessionToken;
+    }
+
+    if (account) {
+        state.account = account;
+        applyAccountBranding(account);
+    }
+
     gate.classList.add("hidden");
     app.classList.remove("hidden");
-    userEmailEl.textContent = email;
+    userEmailEl.textContent = account?.company_name
+        ? `${account.company_name} · ${email}`
+        : email;
+
+    const tenantIdEl = document.getElementById("tenant-id");
+    if (tenantIdEl) {
+        const tenantId = account?.tenant_id || "";
+        if (tenantId) {
+            tenantIdEl.hidden = false;
+            tenantIdEl.textContent = `Tenant ID: ${tenantId}`;
+            tenantIdEl.title = "Use this value for data-tenant in the CDN embed script";
+        } else {
+            tenantIdEl.hidden = true;
+            tenantIdEl.textContent = "";
+        }
+    }
 
     apiFetch("/api/health").then((data) => {
         if (!data.voice) {
@@ -723,8 +783,36 @@ async function toggleRecording() {
 
 emailSubmit.addEventListener("mousedown", unlockAudio);
 
-let gateMode = "email"; // "email" | "otp"
+let authMode = "login"; // login | register
+let gateStep = "choose"; // choose | form | otp
 let pendingEmail = "";
+let pendingPurpose = "login";
+
+function clearSession() {
+    state.sessionToken = "";
+    state.account = null;
+    state.email = "";
+    const tenantIdEl = document.getElementById("tenant-id");
+    if (tenantIdEl) {
+        tenantIdEl.hidden = true;
+        tenantIdEl.textContent = "";
+    }
+}
+
+function applyAccountBranding(account) {
+    const widget = account?.widget || {};
+    const color = widget.primary_color || "#141414";
+    document.documentElement.style.setProperty("--accent", color);
+
+    if (widget.title) {
+        document.title = widget.title;
+    }
+
+    if (widget.welcome_message && emptyState) {
+        const note = emptyState.querySelector(".empty-copy, p");
+        if (note) note.textContent = widget.welcome_message;
+    }
+}
 
 function showGateError(message) {
     gateError.textContent = message;
@@ -734,79 +822,158 @@ function showGateError(message) {
 function setGateBusy(busy) {
     emailSubmit.disabled = busy;
     otpResend.disabled = busy;
-    emailInput.disabled = busy && gateMode === "otp";
+    tabLogin.disabled = busy;
+    tabRegister.disabled = busy;
+    authBack.disabled = busy;
 }
 
-function showOtpStep(email) {
-    gateMode = "otp";
+function showAuthChoose() {
+    gateStep = "choose";
+    authMode = "login";
+    pendingEmail = "";
+    pendingPurpose = "login";
+
+    authChoose.classList.remove("hidden");
+    authFlow.classList.add("hidden");
+
+    emailInput.value = "";
+    emailInput.readOnly = false;
+    otpInput.value = "";
+    otpStep.classList.add("hidden");
+    registerFields.classList.add("hidden");
+    emailSubmit.textContent = "Send code";
+    gateError.hidden = true;
+    gateHint.hidden = false;
+}
+
+function openAuthFlow(mode) {
+    authMode = mode === "register" ? "register" : "login";
+    gateStep = "form";
+    pendingPurpose = authMode;
+
+    authChoose.classList.add("hidden");
+    authFlow.classList.remove("hidden");
+
+    registerFields.classList.toggle("hidden", authMode !== "register");
+    gateLabel.textContent = authMode === "login"
+        ? "Login with your email"
+        : "Create your company account";
+    emailInput.readOnly = false;
+    emailInput.value = "";
+    otpStep.classList.add("hidden");
+    otpInput.value = "";
+    emailSubmit.textContent = "Send code";
+    gateError.hidden = true;
+    gateHint.hidden = false;
+    emailInput.focus();
+}
+
+function showOtpStep(email, purpose) {
+    gateStep = "otp";
     pendingEmail = email;
+    pendingPurpose = purpose;
+
+    // Keep Login/Create selection hidden during OTP.
+    authChoose.classList.add("hidden");
+    authFlow.classList.remove("hidden");
+
     gateLabel.textContent = `Enter the code sent to ${email}`;
     emailInput.readOnly = true;
+    registerFields.classList.add("hidden");
     otpStep.classList.remove("hidden");
     otpInput.value = "";
     emailSubmit.textContent = "Verify";
+    gateHint.hidden = true;
     otpInput.focus();
 }
 
-function resetGateToEmail() {
-    gateMode = "email";
-    pendingEmail = "";
-    gateLabel.textContent = "Continue with your email";
-    emailInput.readOnly = false;
-    otpStep.classList.add("hidden");
-    otpInput.value = "";
-    emailSubmit.textContent = "Continue";
+function resetGateForm() {
+    showAuthChoose();
 }
 
-async function requestOtp(email) {
+function collectRegisterPayload(email) {
+    const company = companyInput.value.trim();
+
+    if (!company) {
+        throw new Error("Enter your company name.");
+    }
+
+    return {
+        email,
+        purpose: "register",
+        company_name: company,
+        custom_prompt: promptInput.value.trim(),
+        widget: {
+            title: widgetTitleInput.value.trim() || "Knowledge Assistant",
+            welcome_message: widgetWelcomeInput.value.trim()
+                || "Ask me anything about your documents.",
+            primary_color: widgetColorInput.value || "#141414",
+            position: widgetPositionInput.value || "bottom-right",
+        },
+    };
+}
+
+async function requestOtp(payload) {
     const response = await fetch(`${API}/api/auth/request-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify(payload),
     });
 
-    let payload = {};
+    let body = {};
     try {
-        payload = await response.json();
+        body = await response.json();
     } catch (_) {
-        payload = {};
+        body = {};
     }
 
     if (!response.ok) {
-        const detail = payload.detail || "Could not send verification code.";
+        const detail = body.detail || "Could not send verification code.";
         throw new Error(typeof detail === "string" ? detail : "Could not send verification code.");
     }
 
-    return payload;
+    return body;
 }
 
-async function verifyOtp(email, otp) {
+async function verifyOtp(email, otp, purpose) {
     const response = await fetch(`${API}/api/auth/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, otp }),
+        body: JSON.stringify({ email, otp, purpose }),
     });
 
-    let payload = {};
+    let body = {};
     try {
-        payload = await response.json();
+        body = await response.json();
     } catch (_) {
-        payload = {};
+        body = {};
     }
 
     if (!response.ok) {
-        const detail = payload.detail || "Invalid verification code.";
+        const detail = body.detail || "Invalid verification code.";
         throw new Error(typeof detail === "string" ? detail : "Invalid verification code.");
     }
 
-    return payload;
+    return body;
 }
+
+tabLogin.addEventListener("click", () => {
+    openAuthFlow("login");
+});
+
+tabRegister.addEventListener("click", () => {
+    openAuthFlow("register");
+});
+
+authBack.addEventListener("click", () => {
+    showAuthChoose();
+});
 
 emailSubmit.addEventListener("click", async () => {
     unlockAudio();
     gateError.hidden = true;
 
-    if (gateMode === "email") {
+    if (gateStep === "form") {
         const email = emailInput.value.trim();
 
         if (!isValidEmail(email)) {
@@ -814,21 +981,34 @@ emailSubmit.addEventListener("click", async () => {
             return;
         }
 
+        let payload = { email, purpose: authMode };
+
+        try {
+            if (authMode === "register") {
+                payload = collectRegisterPayload(email);
+            }
+        } catch (err) {
+            showGateError(err.message);
+            return;
+        }
+
         setGateBusy(true);
         emailSubmit.textContent = "Sending…";
 
         try {
-            await requestOtp(email);
-            showOtpStep(email);
+            await requestOtp(payload);
+            showOtpStep(email, authMode);
         } catch (err) {
             showGateError(err.message || "Could not send verification code.");
-            emailSubmit.textContent = "Continue";
+            emailSubmit.textContent = "Send code";
         } finally {
             setGateBusy(false);
         }
 
         return;
     }
+
+    if (gateStep !== "otp") return;
 
     const otp = otpInput.value.trim();
 
@@ -841,9 +1021,13 @@ emailSubmit.addEventListener("click", async () => {
     emailSubmit.textContent = "Verifying…";
 
     try {
-        const result = await verifyOtp(pendingEmail, otp);
-        startSession(result.email || pendingEmail);
-        resetGateToEmail();
+        const result = await verifyOtp(pendingEmail, otp, pendingPurpose);
+        startSession(
+            result.account?.email || pendingEmail,
+            result.account || null,
+            result.session_token || null,
+        );
+        resetGateForm();
     } catch (err) {
         showGateError(err.message || "Invalid verification code.");
         emailSubmit.textContent = "Verify";
@@ -859,7 +1043,10 @@ otpResend.addEventListener("click", async () => {
     setGateBusy(true);
 
     try {
-        await requestOtp(pendingEmail);
+        const payload = pendingPurpose === "register"
+            ? collectRegisterPayload(pendingEmail)
+            : { email: pendingEmail, purpose: "login" };
+        await requestOtp(payload);
         showGateError("A new code was sent.");
         gateError.style.color = "var(--text-secondary)";
         otpInput.focus();
@@ -919,7 +1106,10 @@ newChatBtn.addEventListener("click", resetConversation);
 
 localStorage.removeItem("ka_email");
 localStorage.removeItem("ka_selected_doc");
+// Clear any previously persisted auth token from earlier builds.
+sessionStorage.removeItem("ka_session_token");
+showAuthChoose();
+
 gate.classList.remove("hidden");
 app.classList.add("hidden");
-emailInput.value = "";
 

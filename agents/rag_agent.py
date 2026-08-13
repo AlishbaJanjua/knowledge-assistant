@@ -2,6 +2,7 @@ from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 import os
 from backend.llm import llm
+from backend.prompts import apply_tenant_instructions
 
 load_dotenv()
 
@@ -45,7 +46,7 @@ def _format_recent_history(history, limit=6):
     return "\n".join(lines)
 
 
-def ask_question(db, question, history=None):
+def ask_question(db, question, history=None, company_name="", custom_prompt=""):
 
 
     summary_words = [
@@ -90,7 +91,7 @@ def ask_question(db, question, history=None):
         else ""
     )
 
-    prompt = f"""
+    core_prompt = f"""
 You are a document assistant.
 
 Answer using ONLY this document context.
@@ -114,6 +115,11 @@ Question:
 Answer:
 """
 
+    prompt = apply_tenant_instructions(
+        core_prompt,
+        company_name=company_name,
+        custom_prompt=custom_prompt,
+    )
 
     response = llm.invoke(
         prompt

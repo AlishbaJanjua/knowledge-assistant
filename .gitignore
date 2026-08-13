@@ -11,6 +11,9 @@ __pycache__/
 # User uploaded files
 uploads/
 
+# Tenant accounts / session secret
+accounts/
+
 # Local/testing files
 dummy_website/
 
