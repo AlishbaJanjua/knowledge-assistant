@@ -566,19 +566,6 @@ function startSession(email, account = null, sessionToken = null) {
         ? `${account.company_name} · ${email}`
         : email;
 
-    const tenantIdEl = document.getElementById("tenant-id");
-    if (tenantIdEl) {
-        const tenantId = account?.tenant_id || "";
-        if (tenantId) {
-            tenantIdEl.hidden = false;
-            tenantIdEl.textContent = `Tenant ID: ${tenantId}`;
-            tenantIdEl.title = "Use this value for data-tenant in the CDN embed script";
-        } else {
-            tenantIdEl.hidden = true;
-            tenantIdEl.textContent = "";
-        }
-    }
-
     apiFetch("/api/health").then((data) => {
         if (!data.voice) {
             showToast("CARTESIA_API_KEY is missing — voice responses will not work.");
@@ -792,11 +779,6 @@ function clearSession() {
     state.sessionToken = "";
     state.account = null;
     state.email = "";
-    const tenantIdEl = document.getElementById("tenant-id");
-    if (tenantIdEl) {
-        tenantIdEl.hidden = true;
-        tenantIdEl.textContent = "";
-    }
 }
 
 function applyAccountBranding(account) {

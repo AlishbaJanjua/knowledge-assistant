@@ -306,48 +306,43 @@ https://cdn.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant/embed/chatbot.js
 
 ### Embed Code (copy-paste)
 
-Customers paste this into their website. Replace `YOUR_TENANT_ID` and keep `data-api` pointed at your live FastAPI backend:
+Customers paste this into their website. No `tenant_id` is required — visitors log in or create an account inside the widget, and the backend session determines their tenant.
 
 ```html
 <script
     src="https://cdn.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant@main/embed/chatbot.js"
-    data-api="http://92.4.88.188:8000"
-    data-tenant="YOUR_TENANT_ID">
+    data-api="http://92.4.88.188:8000">
 </script>
 ```
 
-### Required attributes
+`data-api` points at your live FastAPI / VPS origin. If omitted when loading from jsDelivr, the script falls back to the production default baked into `embed/chatbot.js`.
+
+### Attributes
 
 | Attribute | Required | Purpose |
 |-----------|----------|---------|
 | `src` | yes | jsDelivr CDN URL for `embed/chatbot.js` |
-| `data-api` | yes | Your FastAPI / VPS base URL (never the jsDelivr host) |
-| `data-tenant` | yes | Tenant id for that company account |
+| `data-api` | recommended | FastAPI / VPS base URL (override for local/staging) |
 
-### What is `data-tenant`?
+There is **no** `data-tenant`. Tenant isolation is created and enforced after OTP authentication.
 
-`data-tenant` is the account **`tenant_id`**.
+### How tenancy works in the embed
 
-- It is created when the company registers.
-- Format: the account email with `@` and `.` replaced by `_`  
-  Example: `acme@company.com` → `acme_company_com`
-- After login, it is shown in the Knowledge Assistant sidebar under the company/email line as **Tenant ID**.
-- It is also returned by `GET /api/account/me` as `account.tenant_id`.
+1. Floating button opens `{data-api}/widget` in an iframe
+2. Visitor chooses **Login** or **Create an account**
+3. Registration collects email, company name, custom prompt, and widget customization
+4. OTP verification creates/loads the account; backend derives `tenant_id` from the email
+5. A signed session token binds the browser to that account/tenant
+6. Documents, Chroma, LangGraph memory, branding, and custom prompts are scoped from that session server-side
 
-The CDN script uses `data-tenant` only to:
-
-1. Load **public** widget appearance from `GET /api/widget-config/{tenant_id}` (title, welcome message, primary color, position)
-2. Open `GET /widget?tenant={tenant_id}` in an iframe on your VPS
-
-It does **not** include custom prompts, OTP codes, session tokens, or other secrets.
+The CDN script never receives custom prompts, OTP codes, session tokens, or account secrets.
 
 ### Local embed (without jsDelivr)
 
 ```html
 <script
     src="http://127.0.0.1:8000/embed/chatbot.js"
-    data-api="http://127.0.0.1:8000"
-    data-tenant="YOUR_TENANT_ID">
+    data-api="http://127.0.0.1:8000">
 </script>
 ```
 
@@ -357,20 +352,21 @@ It does **not** include custom prompts, OTP codes, session tokens, or other secr
 External Website
        │
        ▼
-   CDN Script (jsDelivr)
+   CDN Script (jsDelivr)  + optional data-api
        │
        ▼
-   chatbot.js  (+ data-api, data-tenant)
+   chatbot.js
        │
-       ├── GET {data-api}/api/widget-config/{tenant_id}   (public branding)
-       │
-       └── iframe → {data-api}/widget?tenant={tenant_id}
+       └── iframe → {data-api}/widget
                       │
                       ▼
-                 FastAPI on VPS
+                 Login / Create Account + OTP
                       │
                       ▼
-              Login OTP + RAG chat
+              Session token → tenant isolation
+                      │
+                      ▼
+                 RAG / memory / uploads
 ```
 
 The CDN embed has been tested on a separate website and successfully loads and communicates with the chatbot.

@@ -13,15 +13,27 @@
         listening: false,
         recognition: null,
         currentAudio: null,
-        tenantHint: new URLSearchParams(window.location.search).get("tenant") || "",
     };
 
     const emailGate = document.getElementById("emailGate");
     const app = document.getElementById("app");
+    const authChoose = document.getElementById("authChoose");
+    const authFlow = document.getElementById("authFlow");
+    const authBack = document.getElementById("authBack");
+    const tabLogin = document.getElementById("tabLogin");
+    const tabRegister = document.getElementById("tabRegister");
+    const registerFields = document.getElementById("registerFields");
+    const companyInput = document.getElementById("companyInput");
+    const promptInput = document.getElementById("promptInput");
+    const widgetTitleInput = document.getElementById("widgetTitleInput");
+    const widgetWelcomeInput = document.getElementById("widgetWelcomeInput");
+    const widgetColorInput = document.getElementById("widgetColorInput");
+    const widgetPositionInput = document.getElementById("widgetPositionInput");
     const emailInput = document.getElementById("email");
     const emailError = document.getElementById("emailError");
     const continueBtn = document.getElementById("continueBtn");
     const gateLabel = document.getElementById("gateLabel");
+    const gateHint = document.getElementById("gateHint");
     const otpStep = document.getElementById("otpStep");
     const otpInput = document.getElementById("otpInput");
     const otpResend = document.getElementById("otpResend");
@@ -373,7 +385,8 @@
 
         if (account) {
             state.account = account;
-            applyWidgetBranding(account.widget || {}, account.company_name || "");
+            // Branding comes from the authenticated account, never from a CDN tenant param.
+            applyWidgetBranding(account.widget || {});
         }
 
         emailGate.classList.add("hidden");
@@ -386,7 +399,7 @@
         loadDocuments().catch((err) => alert(err.message));
     }
 
-    function applyWidgetBranding(widget, companyName) {
+    function applyWidgetBranding(widget) {
         const color = widget.primary_color || "#141414";
         document.documentElement.style.setProperty("--accent", color);
 
@@ -396,16 +409,15 @@
         }
 
         if (widget.welcome_message && emptyState) {
-            emptyState.textContent = widget.welcome_message;
-        }
-
-        if (companyName) {
-            gateLabel.textContent = `${companyName} login`;
+            const note = emptyState.querySelector("p") || emptyState;
+            note.textContent = widget.welcome_message;
         }
     }
 
-    let gateStep = "form";
+    let authMode = "login";
+    let gateStep = "choose";
     let pendingEmail = "";
+    let pendingPurpose = "login";
 
     function showGateError(message) {
         emailError.textContent = message;
@@ -415,62 +427,139 @@
     function setGateBusy(busy) {
         continueBtn.disabled = busy;
         otpResend.disabled = busy;
+        tabLogin.disabled = busy;
+        tabRegister.disabled = busy;
+        authBack.disabled = busy;
     }
 
-    function showOtpStep(email) {
+    function showAuthChoose() {
+        gateStep = "choose";
+        authMode = "login";
+        pendingEmail = "";
+        pendingPurpose = "login";
+
+        authChoose.classList.remove("hidden");
+        authFlow.classList.add("hidden");
+
+        emailInput.value = "";
+        emailInput.readOnly = false;
+        otpInput.value = "";
+        otpStep.classList.add("hidden");
+        registerFields.classList.add("hidden");
+        continueBtn.textContent = "Send code";
+        emailError.hidden = true;
+        gateHint.hidden = false;
+    }
+
+    function openAuthFlow(mode) {
+        authMode = mode === "register" ? "register" : "login";
+        gateStep = "form";
+        pendingPurpose = authMode;
+
+        authChoose.classList.add("hidden");
+        authFlow.classList.remove("hidden");
+
+        registerFields.classList.toggle("hidden", authMode !== "register");
+        gateLabel.textContent = authMode === "login"
+            ? "Login with your email"
+            : "Create your company account";
+        emailInput.readOnly = false;
+        emailInput.value = "";
+        otpStep.classList.add("hidden");
+        otpInput.value = "";
+        continueBtn.textContent = "Send code";
+        emailError.hidden = true;
+        gateHint.hidden = false;
+        emailInput.focus();
+    }
+
+    function showOtpStep(email, purpose) {
         gateStep = "otp";
         pendingEmail = email;
+        pendingPurpose = purpose;
+
+        authChoose.classList.add("hidden");
+        authFlow.classList.remove("hidden");
+
         gateLabel.textContent = `Enter the code sent to ${email}`;
         emailInput.readOnly = true;
+        registerFields.classList.add("hidden");
         otpStep.classList.remove("hidden");
         otpInput.value = "";
         continueBtn.textContent = "Verify";
+        gateHint.hidden = true;
         otpInput.focus();
     }
 
-    async function requestLoginOtp(email) {
+    function collectRegisterPayload(email) {
+        const company = companyInput.value.trim();
+
+        if (!company) {
+            throw new Error("Enter your company name.");
+        }
+
+        return {
+            email,
+            purpose: "register",
+            company_name: company,
+            custom_prompt: promptInput.value.trim(),
+            widget: {
+                title: widgetTitleInput.value.trim() || "Knowledge Assistant",
+                welcome_message: widgetWelcomeInput.value.trim()
+                    || "Ask me anything about your documents.",
+                primary_color: widgetColorInput.value || "#141414",
+                position: widgetPositionInput.value || "bottom-right",
+            },
+        };
+    }
+
+    async function requestOtp(payload) {
         const response = await fetch(`${API_URL}/api/auth/request-otp`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, purpose: "login" }),
+            body: JSON.stringify(payload),
         });
 
-        let payload = {};
+        let body = {};
         try {
-            payload = await response.json();
+            body = await response.json();
         } catch (_) {
-            payload = {};
+            body = {};
         }
 
         if (!response.ok) {
-            const detail = payload.detail || "Could not send verification code.";
+            const detail = body.detail || "Could not send verification code.";
             throw new Error(typeof detail === "string" ? detail : "Could not send verification code.");
         }
 
-        return payload;
+        return body;
     }
 
-    async function verifyLoginOtp(email, otp) {
+    async function verifyOtp(email, otp, purpose) {
         const response = await fetch(`${API_URL}/api/auth/verify-otp`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, otp, purpose: "login" }),
+            body: JSON.stringify({ email, otp, purpose }),
         });
 
-        let payload = {};
+        let body = {};
         try {
-            payload = await response.json();
+            body = await response.json();
         } catch (_) {
-            payload = {};
+            body = {};
         }
 
         if (!response.ok) {
-            const detail = payload.detail || "Invalid verification code.";
+            const detail = body.detail || "Invalid verification code.";
             throw new Error(typeof detail === "string" ? detail : "Invalid verification code.");
         }
 
-        return payload;
+        return body;
     }
+
+    tabLogin.addEventListener("click", () => openAuthFlow("login"));
+    tabRegister.addEventListener("click", () => openAuthFlow("register"));
+    authBack.addEventListener("click", () => showAuthChoose());
 
     continueBtn.addEventListener("click", async () => {
         emailError.hidden = true;
@@ -483,12 +572,23 @@
                 return;
             }
 
+            let payload = { email, purpose: authMode };
+
+            try {
+                if (authMode === "register") {
+                    payload = collectRegisterPayload(email);
+                }
+            } catch (err) {
+                showGateError(err.message);
+                return;
+            }
+
             setGateBusy(true);
             continueBtn.textContent = "Sending…";
 
             try {
-                await requestLoginOtp(email);
-                showOtpStep(email);
+                await requestOtp(payload);
+                showOtpStep(email, authMode);
             } catch (err) {
                 showGateError(err.message || "Could not send verification code.");
                 continueBtn.textContent = "Send code";
@@ -510,7 +610,7 @@
         continueBtn.textContent = "Verifying…";
 
         try {
-            const result = await verifyLoginOtp(pendingEmail, otp);
+            const result = await verifyOtp(pendingEmail, otp, pendingPurpose);
             startSession(
                 result.account?.email || pendingEmail,
                 result.account || null,
@@ -531,7 +631,11 @@
         setGateBusy(true);
 
         try {
-            await requestLoginOtp(pendingEmail);
+            let payload = { email: pendingEmail, purpose: pendingPurpose };
+            if (pendingPurpose === "register") {
+                payload = collectRegisterPayload(pendingEmail);
+            }
+            await requestOtp(payload);
             showGateError("A new code was sent.");
             otpInput.focus();
         } catch (err) {
@@ -549,20 +653,9 @@
         if (e.key === "Enter") continueBtn.click();
     });
 
-    if (state.tenantHint) {
-        fetch(`${API_URL}/api/widget-config/${encodeURIComponent(state.tenantHint)}`)
-            .then((response) => {
-                if (!response.ok) throw new Error("config");
-                return response.json();
-            })
-            .then((data) => {
-                applyWidgetBranding(data.widget || {}, data.company_name || "");
-            })
-            .catch(() => {});
-    }
-
     // Clear any previously persisted widget auth token from earlier builds.
     sessionStorage.removeItem("ka_widget_session");
+    showAuthChoose();
 
     document.getElementById("loadDocuments").addEventListener("click", () => {
         loadDocuments().catch((err) => alert(err.message));

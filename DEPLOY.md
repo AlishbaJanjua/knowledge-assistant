@@ -10,15 +10,16 @@ python run.py
 
 Open: http://127.0.0.1:8000
 
-Embed on any local page (replace `YOUR_TENANT_ID` with the account tenant id shown after login):
+Embed on any local page:
 
 ```html
 <script
   src="http://127.0.0.1:8000/embed/chatbot.js"
   data-api="http://127.0.0.1:8000"
-  data-tenant="YOUR_TENANT_ID"
 ></script>
 ```
+
+Visitors open Login / Create Account inside the widget. No `data-tenant` is needed.
 
 ## 2. Required secrets
 
@@ -46,20 +47,19 @@ docker run -p 8000:8000 \
 
 ## 4. After deploy — CDN-style embed
 
-jsDelivr serves `embed/chatbot.js` from GitHub. The script must also point at your live FastAPI backend and a tenant id:
+jsDelivr serves `embed/chatbot.js` from GitHub. Point `data-api` at your live FastAPI backend (no tenant id):
 
 ```html
 <script
   src="https://cdn.jsdelivr.net/gh/AlishbaJanjua/knowledge-assistant@main/embed/chatbot.js"
   data-api="https://YOUR-DOMAIN-OR-VPS:8000"
-  data-tenant="YOUR_TENANT_ID"
 ></script>
 ```
 
-- `data-api` — FastAPI origin on your VPS/host (not jsDelivr)
-- `data-tenant` — company `tenant_id` from the Knowledge Assistant sidebar after login
+- `data-api` — FastAPI origin on your VPS/host (not jsDelivr). Optional if the baked-in production default in `chatbot.js` is correct.
+- Tenants are created/identified after Login or Create Account + OTP inside `/widget`.
 
-That one script gives the floating chat button, tenant branding, widget UI, upload, documents, delete, voice in/out, and chat — same features as locally.
+That one script gives the floating chat button, widget UI, auth, upload, documents, delete, voice in/out, and chat — same features as locally.
 
 ## 5. Host tip
 

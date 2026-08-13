@@ -4,24 +4,16 @@
     if (window.__KnowledgeAssistantEmbedLoaded) return;
     window.__KnowledgeAssistantEmbedLoaded = true;
 
+    // Production FastAPI origin. Override with data-api for local/staging.
+    var DEFAULT_API_BASE = "http://92.4.88.188:8000";
+
     var script = document.currentScript;
-    var tenantId = ((script && script.getAttribute("data-tenant")) || "").trim();
     var apiBase = resolveApiBase(script);
 
     if (!apiBase) {
         console.error(
-            "[Knowledge Assistant] Missing data-api. " +
-                "When loading from jsDelivr/CDN you must set data-api to your FastAPI backend URL " +
-                '(example: data-api="http://92.4.88.188:8000").'
-        );
-        return;
-    }
-
-    if (!tenantId) {
-        console.error(
-            "[Knowledge Assistant] Missing data-tenant. " +
-                "Set data-tenant to your account tenant_id " +
-                "(shown in the Knowledge Assistant sidebar after login)."
+            "[Knowledge Assistant] Could not resolve API base. " +
+                'Set data-api to your FastAPI URL (example: data-api="http://92.4.88.188:8000").'
         );
         return;
     }
@@ -32,7 +24,6 @@
         title: "Knowledge Assistant",
         primary_color: "#141414",
         position: "bottom-right",
-        welcome_message: "Ask me anything about your documents.",
     };
 
     function resolveApiBase(el) {
@@ -42,24 +33,24 @@
         }
 
         var src = el && el.src;
-        if (!src) {
-            return "http://127.0.0.1:8000";
+        if (src) {
+            try {
+                var url = new URL(src, window.location.href);
+                // Never treat the CDN/GitHub host as the Knowledge Assistant API.
+                if (
+                    /(?:^|\.)jsdelivr\.net$/i.test(url.hostname) ||
+                    /(?:^|\.)githubusercontent\.com$/i.test(url.hostname) ||
+                    /(?:^|\.)github\.com$/i.test(url.hostname)
+                ) {
+                    return DEFAULT_API_BASE;
+                }
+                return url.origin;
+            } catch (_) {
+                /* fall through */
+            }
         }
 
-        try {
-            var url = new URL(src, window.location.href);
-            // Never treat the CDN/GitHub host as the Knowledge Assistant API.
-            if (
-                /(?:^|\.)jsdelivr\.net$/i.test(url.hostname) ||
-                /(?:^|\.)githubusercontent\.com$/i.test(url.hostname) ||
-                /(?:^|\.)github\.com$/i.test(url.hostname)
-            ) {
-                return "";
-            }
-            return url.origin;
-        } catch (_) {
-            return "http://127.0.0.1:8000";
-        }
+        return DEFAULT_API_BASE;
     }
 
     function sideCss(position) {
@@ -104,30 +95,6 @@
     document.head.appendChild(style);
     applyStyles();
 
-    // Public appearance only (title/color/position/welcome). Never fetches prompts/secrets.
-    fetch(apiBase + "/api/widget-config/" + encodeURIComponent(tenantId))
-        .then(function (res) {
-            if (!res.ok) throw new Error("config");
-            return res.json();
-        })
-        .then(function (data) {
-            if (data && data.widget) {
-                config.title = data.widget.title || config.title;
-                config.primary_color = data.widget.primary_color || config.primary_color;
-                config.position = data.widget.position || config.position;
-                config.welcome_message =
-                    data.widget.welcome_message || config.welcome_message;
-                button.setAttribute("aria-label", "Open " + config.title);
-                applyStyles();
-            }
-        })
-        .catch(function () {
-            console.warn(
-                "[Knowledge Assistant] Could not load widget config for tenant:",
-                tenantId
-            );
-        });
-
     var opened = false;
 
     button.addEventListener("click", function () {
@@ -140,15 +107,13 @@
             return;
         }
 
-        // iframe loads FastAPI /widget on the VPS — auth/OTP stays inside that origin.
+        // iframe loads FastAPI /widget — Login/Create Account + OTP run on the VPS.
+        // Tenant is determined by the authenticated session after OTP, never by the CDN script.
         var iframe = document.createElement("iframe");
         iframe.id = "knowledge-chat-frame";
         iframe.title = config.title;
         iframe.allow = "microphone; autoplay";
-        iframe.src =
-            apiBase +
-            "/widget?tenant=" +
-            encodeURIComponent(tenantId);
+        iframe.src = apiBase + "/widget";
         document.body.appendChild(iframe);
 
         opened = true;
