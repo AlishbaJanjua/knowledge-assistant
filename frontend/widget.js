@@ -412,6 +412,35 @@
             const note = emptyState.querySelector("p") || emptyState;
             note.textContent = widget.welcome_message;
         }
+
+        // Notify the CDN parent launcher (color/position/title only — never custom_prompt).
+        notifyParentBranding(widget);
+    }
+
+    function notifyParentBranding(widget) {
+        if (!window.parent || window.parent === window) return;
+
+        const safe = {
+            title: (widget && widget.title) || "Knowledge Assistant",
+            welcome_message:
+                (widget && widget.welcome_message) ||
+                "Ask me anything about your documents.",
+            primary_color: (widget && widget.primary_color) || "#141414",
+            position: (widget && widget.position) || "bottom-right",
+        };
+
+        try {
+            window.parent.postMessage(
+                {
+                    source: "knowledge-assistant",
+                    type: "widget-config",
+                    widget: safe,
+                },
+                "*",
+            );
+        } catch (_) {
+            /* ignore cross-window errors */
+        }
     }
 
     let authMode = "login";
