@@ -504,7 +504,7 @@ body {
 }
 
 .message.user .bubble {
-    background: var(--user-bg);
+    background: var(--accent);
     color: var(--user-text);
 }
 

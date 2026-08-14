@@ -781,10 +781,24 @@ function clearSession() {
     state.email = "";
 }
 
+function contrastTextFor(hex) {
+    const color = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : "#141414";
+    const channel = (offset) => parseInt(color.slice(offset, offset + 2), 16) / 255;
+    const toLinear = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    const luminance =
+        0.2126 * toLinear(channel(1)) +
+        0.7152 * toLinear(channel(3)) +
+        0.0722 * toLinear(channel(5));
+    return luminance > 0.55 ? "#141414" : "#fafafa";
+}
+
 function applyAccountBranding(account) {
     const widget = account?.widget || {};
     const color = widget.primary_color || "#141414";
-    document.documentElement.style.setProperty("--accent", color);
+    const root = document.documentElement;
+    root.style.setProperty("--accent", color);
+    root.style.setProperty("--user-bg", color);
+    root.style.setProperty("--user-text", contrastTextFor(color));
 
     if (widget.title) {
         document.title = widget.title;
